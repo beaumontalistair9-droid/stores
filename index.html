@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Store Room Stock Tracker</title>
+    <!-- Include Html5Qrcode library for camera barcode scanning -->
+    <script src="https://cloudflare.com"></script>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --success: #16a34a;
+            --danger: #dc2626;
+            --dark: #1e293b;
+            --light: #f8fafc;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: var(--light);
+            color: var(--dark);
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0,10%);
+        }
+        h1, h2 { text-align: center; margin-top: 0; }
+        .mode-selector {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .mode-btn {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #cbd5e1;
+            border-radius: 8px;
+            background: white;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .mode-btn.active[data-mode="IN"] { background: var(--success); color: white; border-color: var(--success); }
+        .mode-btn.active[data-mode="OUT"] { background: var(--danger); color: white; border-color: var(--danger); }
+        .mode-btn.active[data-mode="VIEW"] { background: var(--primary); color: white; border-color: var(--primary); }
+        
+        #reader {
+            width: 100%;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #000;
+            margin-bottom: 20px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+        input, select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+        button.action-btn {
+            width: 100%;
+            padding: 12px;
+            background: var(--dark);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .inventory-list {
+            margin-top: 30px;
+            border-top: 2px solid #e2e8f0;
+            padding-top: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th, td {
+            text-align: left;
+            padding: 10px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        th { background-color: #f1f5f9; }
+        .badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            color: white;
+        }
+        .badge.in { background: var(--success); }
+        .badge.out { background: var(--danger); }
+        .export-btn {
+            background: #0284c7 !important;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🏬 Stock Room Tracker</h1>
+    
+    <!-- Mode Selection -->
+    <div class="mode-selector">
+        <button class="mode-btn active" data-mode="IN">📥 Stock In</button>
+        <button class="mode-btn" data-mode="OUT">📤 Stock Out</button>
+        <button class="mode-btn" data-mode="VIEW">📊 View Stock</button>
+    </div>
+
+    <!-- Scanner Area -->
+    <div id="scanner-section">
+        <div id="reader"></div>
+    </div>
+
+    <!-- Manual Entry / Scan Confirmation Form -->
+    <div id="form-section">
+        <div class="form-group">
+            <label for="barcode">Barcode Number</label>
+            <input type="text" id="barcode" placeholder="Scan or type barcode...">
+        </div>
+        <div class="form-group" id="name-group">
+            <label for="prod-name">Item Name</label>
+            <input type="text" id="prod-name" placeholder="e.g., Kingspan Insulation Board">
+        </div>
+        <div class="form-group">
+            <label for="quantity">Quantity</label>
+            <input type="number" id="quantity" value="1" min="1">
+        </div>
+        <button class="action-btn" id="submit-transaction">Log Transaction</button>
+    </div>
+
+    <!-- Inventory / Logs Table View -->
+    <div class="inventory-list">
+        <h2 id="table-title">Recent Activity Logs</h2>
+        <button class="action-btn export-btn" id="export-csv">💾 Export Database to CSV</button>
+        <div style="overflow-x: auto;">
+            <table id="data-table">
+                <thead>
+                    <tr id="table-headers">
+                        <!-- Dynamic headers based on mode -->
+                    </tr>
+                </thead>
+                <tbody id="table-body">
+                    <!-- Dynamic rows -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+    // App State Variables
+    let currentMode = 'IN'; // IN, OUT, VIEW
+    let inventory = JSON.parse(localStorage.getItem('store_inventory')) || {};
+    let logs = JSON.parse(localStorage.getItem('store_logs')) || [];
+    let html5QrcodeScanner;
+
+    // UI Elements
+    const modeButtons = document.querySelectorAll('.mode-btn');
+    const barcodeInput = document.getElementById('barcode');
+    const nameInput = document.getElementById('prod-name');
+    const nameGroup = document.getElementById('name-group');
+    const qtyInput = document.getElementById('quantity');
+    const submitBtn = document.getElementById('submit-transaction');
+    const tableHeaders = document.getElementById('table-headers');
+    const tableBody = document.getElementById('table-body');
+    const tableTitle = document.getElementById('table-title');
+    const scannerSection = document.getElementById('scanner-section');
+    const formSection = document.getElementById('form-section');
+
+    // Handle Mode Changes
+    modeButtons.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            modeButtons.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentMode = btn.dataset.mode;
+            updateUI();
+        });
+    });
+
+    function updateUI() {
+        if (currentMode === 'VIEW') {
+            scannerSection.style.display = 'none';
+            formSection.style.display = 'none';
+            tableTitle.textContent = "Current Stock Levels";
+            tableHeaders.innerHTML = `<th>Barcode</th><th>Item Name</th><th>Quantity On Hand</th>`;
+            renderCurrentStock();
+        } else {
+            scannerSection.style.display = 'block';
+            formSection.style.display = 'block';
+            tableTitle.textContent = "Recent Activity Logs";
+            tableHeaders.innerHTML = `<th>Time</th><th>Barcode</th><th>Item</th><th>Type</th><th>Qty</th>`;
+            
+            if (currentMode === 'IN') {
+                submitBtn.textContent = "Log Stock Addition (In)";
+                submitBtn.style.backgroundColor = "var(--success)";
+                nameGroup.style.display = "block";
+            } else {
+                submitBtn.textContent = "Log Stock Removal (Out)";
+                submitBtn.style.backgroundColor = "var(--danger)";
+                nameGroup.style.display = "none"; // Don't need to specify name when checking out
+            }
+            renderLogs();
+        }
+    }
+
+    // Process Scanned Data
+    function onScanSuccess(decodedText, decodedResult) {
+        barcodeInput.value = decodedText;
+        // Auto fill name if item already exists in database
+        if (inventory[decodedText]) {
+            nameInput.value = inventory[decodedText].name;
+        } else {
+            nameInput.value = '';
+        }
+        // Play quick audio beep indication if supported
+        try { navigator.vibrate(100); } catch(e){}
+    }
+
+    // Initialize Barcode Camera Scanner
+    function initScanner() {
+        html5QrcodeScanner = new Html5QrcodeScanner("reader", { 
+            fps: 10, 
+            qrbox: {width: 250, height: 150},
+            rememberLastUsedCamera: true
+        });
+        html5QrcodeScanner.render(onScanSuccess);
+    }
+
+    // Process Manual or Scan Submission
+    submitBtn.addEventListener('click', () => {
+        const barcode = barcodeInput.value.trim();
+        let name = nameInput.value.trim();
+        const qty = parseInt(qtyInput.value);
+
+        if (!barcode || isNaN(qty) || qty <= 0) {
+            alert('Please scan/enter a valid barcode and quantity.');
+            return;
+        }
+
+        if (currentMode === 'IN') {
+            if (!name) name = "Unauthorised / Unknown Item";
+            
+            // Update Inventory Database
+            if (inventory[barcode]) {
+                inventory[barcode].qty += qty;
+            } else {
+                inventory[barcode] = { name: name, qty: qty };
+            }
+        } else if (currentMode === 'OUT') {
+            // Verify stock exists
+            if (!inventory[barcode] || inventory[barcode].qty < qty) {
+                alert(`Error: Insufficient stock. Only ${(inventory[barcode]?.qty || 0)} units available.`);
+                return;
+            }
+            inventory[barcode].qty -= qty;
+            name = inventory[barcode].name;
+        }
+
+        // Add to Transaction Logs
+        logs.unshift({
+            timestamp: new Date().toLocaleString(),
+            barcode: barcode,
+            name: name,
+            type: currentMode,
+            qty: qty
