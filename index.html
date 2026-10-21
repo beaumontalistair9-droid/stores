@@ -27,7 +27,7 @@
             background: white;
             padding: 20px;
             border-radius: 12px;
-            box-shadow: 0 4px 6px -1px rgba(0,0,0,0,10%);
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
         }
         h1, h2 { text-align: center; margin-top: 0; }
         .mode-selector {
@@ -169,10 +169,10 @@
 
 <script>
     // App State Variables
-    let currentMode = 'IN'; // IN, OUT, VIEW
+    let currentMode = 'IN'; 
     let inventory = JSON.parse(localStorage.getItem('store_inventory')) || {};
     let logs = JSON.parse(localStorage.getItem('store_logs')) || [];
-    let html5QrcodeScanner;
+    let html5QrcodeScanner = null;
 
     // UI Elements
     const modeButtons = document.querySelectorAll('.mode-btn');
@@ -189,7 +189,7 @@
 
     // Handle Mode Changes
     modeButtons.forEach(btn => {
-        btn.addEventListener('click', (e) => {
+        btn.addEventListener('click', () => {
             modeButtons.forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             currentMode = btn.dataset.mode;
@@ -217,33 +217,42 @@
             } else {
                 submitBtn.textContent = "Log Stock Removal (Out)";
                 submitBtn.style.backgroundColor = "var(--danger)";
-                nameGroup.style.display = "none"; // Don't need to specify name when checking out
+                nameGroup.style.display = "none";
             }
             renderLogs();
         }
     }
 
     // Process Scanned Data
-    function onScanSuccess(decodedText, decodedResult) {
+    function onScanSuccess(decodedText) {
         barcodeInput.value = decodedText;
-        // Auto fill name if item already exists in database
         if (inventory[decodedText]) {
             nameInput.value = inventory[decodedText].name;
         } else {
             nameInput.value = '';
         }
-        // Play quick audio beep indication if supported
         try { navigator.vibrate(100); } catch(e){}
     }
 
-    // Initialize Barcode Camera Scanner
+    // Initialize Barcode Camera Scanner Safely
     function initScanner() {
-        html5QrcodeScanner = new Html5QrcodeScanner("reader", { 
-            fps: 10, 
-            qrbox: {width: 250, height: 150},
-            rememberLastUsedCamera: true
-        });
-        html5QrcodeScanner.render(onScanSuccess);
+        try {
+            if (typeof Html5QrcodeScanner !== 'undefined') {
+                html5QrcodeScanner = new Html5QrcodeScanner("reader", { 
+                    fps: 10, 
+                    qrbox: {width: 250, height: 150},
+                    rememberLastUsedCamera: true
+                });
+                html5QrcodeScanner.render(onScanSuccess, (err) => {
+                    // Suppress verbose scanner matching logs to keep console clean
+                });
+            } else {
+                console.error("Scanning library failed to load from CDN.");
+                document.getElementById('reader').innerHTML = "<p style='color:red;padding:10px;'>Scanner error: Library failed to load. Check internet connection.</p>";
+            }
+        } catch (e) {
+            console.error("Scanner setup failed: ", e);
+        }
     }
 
     // Process Manual or Scan Submission
@@ -258,28 +267,85 @@
         }
 
         if (currentMode === 'IN') {
-            if (!name) name = "Unauthorised / Unknown Item";
-            
-            // Update Inventory Database
+            if (!name) name = "Unknown Item (" + barcode + ")";
             if (inventory[barcode]) {
                 inventory[barcode].qty += qty;
             } else {
                 inventory[barcode] = { name: name, qty: qty };
             }
         } else if (currentMode === 'OUT') {
-            // Verify stock exists
             if (!inventory[barcode] || inventory[barcode].qty < qty) {
                 alert(`Error: Insufficient stock. Only ${(inventory[barcode]?.qty || 0)} units available.`);
                 return;
-            }
-            inventory[barcode].qty -= qty;
-            name = inventory[barcode].name;
-        }
-
-        // Add to Transaction Logs
-        logs.unshift({
-            timestamp: new Date().toLocaleString(),
-            barcode: barcode,
-            name: name,
-            type: currentMode,
-            qty: qty
+}
+inventory[barcode].qty -= qty;
+name = inventory[barcode].name;
+}
+logs.unshift({
+timestamp: new Date().toLocaleString(),
+barcode: barcode,
+name: name,
+type: currentMode,
+qty: qty
+});
+localStorage.setItem('store_inventory', JSON.stringify(inventory));
+localStorage.setItem('store_logs', JSON.stringify(logs));
+barcodeInput.value = '';
+nameInput.value = '';
+qtyInput.value = '1';
+alert('Stock logged successfully!');
+updateUI();
+});
+function renderLogs() {
+tableBody.innerHTML = '';
+logs.slice(0, 50).forEach(log => {
+const tr = document.createElement('tr');
+tr.innerHTML = `
+${log.timestamp}
+${log.barcode}
+${log.name}
+${log.type}
+${log.qty}
+`;
+tableBody.appendChild(tr);
+});
+}
+function renderCurrentStock() {
+tableBody.innerHTML = '';
+Object.keys(inventory).forEach(barcode => {
+const item = inventory[barcode];
+const tr = document.createElement('tr');
+tr.innerHTML = `
+${barcode}
+${item.name}
+${item.qty} units
+`;
+tableBody.appendChild(tr);
+});
+}
+document.getElementById('export-csv').addEventListener('click', () => {
+let csvContent = "data:text/csv;charset=utf-8,";
+if (currentMode === 'VIEW') {
+csvContent += "Barcode,Item Name,Quantity On Hand\n";
+Object.keys(inventory).forEach(b => {
+csvContent += "${b}","${inventory[b].name}",${inventory[b].qty}\n;
+});
+} else {
+csvContent += "Timestamp,Barcode,Item Name,Type,Quantity\n";
+logs.forEach(l => {
+csvContent += "${l.timestamp}","${l.barcode}","${l.name}","${l.type}",${l.qty}\n;
+});
+}
+const encodedUri = encodeURI(csvContent);
+const link = document.createElement("a");
+link.setAttribute("href", encodedUri);
+link.setAttribute("download", stock_report_${currentMode.toLowerCase()}.csv);
+document.body.appendChild(link);
+link.click();
+document.body.removeChild(link);
+});
+// Run setup only after entire window is fully parsed
+window.addEventListener('DOMContentLoaded', () => {
+initScanner();
+updateUI();
+});
